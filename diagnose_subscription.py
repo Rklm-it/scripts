@@ -154,9 +154,18 @@ def check_inbound(srv, ib, node_ib: dict | None, user_uuid: str = "") -> list[st
         )
 
     clients = (node_ib.get("settings") or {}).get("clients") or []
-    ids = {str(c.get("id", "")).lower() for c in clients}
+    # VLESS-клиент опознаётся по `id`, а Shadowsocks-2022 — по `password`
+    # (UUID там превращается в ключ), при этом Cell всегда кладёт UUID ещё и
+    # в `email` для статистики. Смотрим все три поля, иначе на ss2022-инбаунде
+    # получаем ложное «UUID не в clients».
+    ids: set[str] = set()
+    for c in clients:
+        for key in ("id", "email", "password"):
+            val = c.get(key)
+            if isinstance(val, str) and val:
+                ids.add(val.lower())
     if user_uuid and ib.protocol != "hysteria2" and user_uuid.lower() not in ids:
-        problems.append(f"UUID юзера НЕ в clients (на ноде {len(ids)} клиентов) — sync не прошёл")
+        problems.append(f"UUID юзера НЕ в clients (на ноде {len(clients)} клиентов) — sync не прошёл")
 
     if ib.protocol in REALITY_PROTOS:
         ss = node_ib.get("streamSettings") or {}
