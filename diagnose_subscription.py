@@ -35,6 +35,14 @@ from sqlalchemy import select, text
 
 sys.path.insert(0, "/app")
 
+# `docker compose exec -T` не даёт TTY → Python буферизует stdout блоками,
+# и во время проб (5с на TCP, 7с на TLS × число инбаундов) кажется, что
+# скрипт повис. Переводим на построчный вывод — прогресс виден сразу.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 from app.db.session import async_session          # noqa: E402
 from app.models.inbound import Inbound            # noqa: E402
 from app.models.server import Server              # noqa: E402
