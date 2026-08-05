@@ -121,6 +121,30 @@ async def node_get(srv: Server, path: str) -> dict | list | None:
         return None
 
 
+async def node_clock_skew(srv: Server) -> float | None:
+    """Расхождение часов ноды с Brain'ом, секунды (по HTTP-заголовку Date).
+
+    Reality завязан на время: клиент шлёт в ClientHello метку, xray её
+    проверяет, и при уплывших часах ноды РЕАЛЬНЫЕ клиенты получают отказ —
+    а TLS-проба этого не видит, потому что она не аутентифицируется и её
+    просто проксируют на dest. Поэтому skew проверяем отдельно.
+    """
+    from email.utils import parsedate_to_datetime
+    url = f"http://{srv.ip_address}:{srv.api_port}/health"
+    try:
+        async with httpx.AsyncClient(timeout=10) as cl:
+            r = await cl.get(url, headers={"Authorization": f"Bearer {srv.api_token}"})
+        raw = r.headers.get("date")
+        if not raw:
+            return None
+        import datetime as _dt
+        node_time = parsedate_to_datetime(raw)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        return (node_time - now).total_seconds()
+    except Exception:
+        return None
+
+
 def endpoint(srv: Server, ib: Inbound) -> tuple[str, int, str]:
     cfg = ib.config_json or {}
     if ib.protocol in CDN_PROTOS:
@@ -254,6 +278,17 @@ async def main() -> None:
                       f"на ноде и что порт {srv.api_port} открыт для этого Brain{N}\n")
                 total_problems += 1
                 continue
+
+            skew = await node_clock_skew(srv)
+            if skew is None:
+                print(f"  {Y}часы ноды: не удалось прочитать (нет заголовка Date){N}")
+            elif abs(skew) > 60:
+                print(f"  {R}часы ноды разошлись с Brain'ом на {skew:+.0f}с — Reality "
+                      f"отвергает клиентов при уплывших часах, ставь NTP: "
+                      f"timedatectl set-ntp true{N}")
+                total_problems += 1
+            else:
+                print(f"  часы ноды: {skew:+.1f}с — ок")
 
             hy_ids = set()
             if isinstance(node_users, dict):
