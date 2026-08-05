@@ -79,8 +79,13 @@ def fmt_routing(config: dict) -> list[str]:
         if tag in ("blocked", "block") and keys == {"network"}:
             out.append(f"  {R}CATCH-ALL в blocked по network={r.get('network')} "
                        f"— режет весь {r.get('network')}-трафик{N}")
-    # Тег, которого нет среди outbound'ов — xray дропает такие соединения
+    # Тег, которого нет среди outbound'ов — xray дропает такие соединения.
+    # НО: тег из блока `api` (stats-сервис) настоящим outbound'ом не является
+    # и резолвится самим xray — его исключаем, иначе ложная тревога.
     ob_tags = {(ob.get("tag") or "") for ob in (config.get("outbounds") or [])}
+    api_tag = ((config.get("api") or {}).get("tag") or "")
+    if api_tag:
+        ob_tags.add(api_tag)
     unknown = sorted({(r.get("outboundTag") or "") for r in rules} - ob_tags - {""})
     if unknown:
         out.append(f"  {R}правила ссылаются на несуществующие outbound: {unknown}{N}")
@@ -96,6 +101,27 @@ def fmt_dns(config: dict) -> str:
     for s in servers:
         flat.append(s if isinstance(s, str) else str(s.get("address", s)))
     return f"dns: {', '.join(flat[:6])}"
+
+
+def log_lines(resp) -> list[str]:
+    """Строки лога из ответа Cell.
+
+    Cell отдаёт {"service": ..., "lines": [...]} (cell/agent/main.py:2040).
+    Возвращаем (строки, доступен_ли_лог): файла может не быть вовсе —
+    xray по умолчанию пишет только loglevel=warning в journal, access-лог
+    не включён, и тогда «ноль соединений» ничего не значит.
+    """
+    if not isinstance(resp, dict):
+        return []
+    lines = resp.get("lines")
+    if isinstance(lines, list):
+        return [str(l) for l in lines]
+    raw = resp.get("logs") or resp.get("output") or ""
+    return str(raw).splitlines()
+
+
+def log_missing(lines: list[str]) -> bool:
+    return (not lines) or any("нет файла" in l or "No such file" in l for l in lines)
 
 
 def count_geosite_rules(config: dict) -> int:
@@ -141,29 +167,29 @@ async def dump_node(srv: Server, ident: str) -> None:
         print(f"  {R}egress ноды: {egress}{N}")
 
     # xray error log: тут видно «invalid request», «unable to resolve» и т.п.
-    lines = []
-    if isinstance(errlog, dict):
-        raw = errlog.get("logs") or errlog.get("output") or ""
-        lines = [l for l in str(raw).splitlines()
-                 if any(k in l.lower() for k in
-                        ("error", "failed", "invalid", "rejected", "unable", "refused"))]
+    err_lines = log_lines(errlog)
+    lines = [l for l in err_lines
+             if any(k in l.lower() for k in
+                    ("error", "failed", "invalid", "rejected", "unable", "refused"))]
     if lines:
         print(f"  {Y}xray error log (последние){N}")
         for l in lines[-6:]:
             print(f"    {l[:200]}")
 
-    # access log: были ли реальные подключения и чьи
-    if isinstance(acclog, dict):
-        raw = str(acclog.get("logs") or acclog.get("output") or "")
-        acc = [l for l in raw.splitlines() if "accepted" in l.lower()]
+    # access log: были ли реальные подключения и чьи.
+    # Внимание: по умолчанию xray пишет только loglevel=warning и access-лога
+    # НЕТ вообще (cell-setup.sh:426). Пустой лог ≠ «клиенты не доходят».
+    acc_lines = log_lines(acclog)
+    if log_missing(acc_lines):
+        print(f"  {Y}access log недоступен (xray его не пишет — "
+              f"log.access не настроен). Судить о числе подключений нельзя{N}")
+    else:
+        acc = [l for l in acc_lines if "accepted" in l.lower()]
         mine = [l for l in acc if ident and ident.lower() in l.lower()]
         print(f"  access log: принятых соединений {len(acc)}"
               + (f", из них этого юзера {len(mine)}" if ident else ""))
         for l in (mine or acc)[-3:]:
             print(f"    {l[:200]}")
-        if not acc:
-            print(f"    {Y}ни одного принятого соединения — до xray клиенты "
-                  f"вообще не доходят либо нода свежая{N}")
 
 
 async def main() -> None:
