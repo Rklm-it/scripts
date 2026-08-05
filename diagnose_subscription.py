@@ -139,6 +139,12 @@ def check_inbound(srv, ib, node_ib: dict | None, user_uuid: str = "") -> list[st
     cfg = ib.config_json or {}
     problems: list[str] = []
 
+    # Hysteria2 — standalone-бинарь, а не xray-инбаунд: в xray-конфиге его
+    # нет и быть не должно. Сверять тут нечего (юзеры hy2 проверяются
+    # отдельно, по Cell /users), иначе получаем ложное «push не прошёл».
+    if ib.protocol == "hysteria2":
+        return []
+
     if node_ib is None:
         return [f"на ноде НЕТ инбаунда с tag='{ib.tag}' — push не прошёл"]
 
