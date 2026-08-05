@@ -32,3 +32,25 @@ docker compose exec -T brain python3 - < /root/diag.py <username|telegram_id|sub
 | UUID юзера в `clients` | нет = sync не прошёл, нужен «Resync users» |
 
 В конце вывода — сводка и что нажимать по каждому типу проблемы.
+
+## compare_nodes.py
+
+Второй шаг, когда `diagnose_subscription.py` показал, что ссылки валидны
+(pbk/short_id/порты/часы сходятся), а у клиента всё равно «n/a». Значит
+ломается не handshake, а проход трафика после него. Скрипт выкладывает по
+каждой ноде то, что осталось непроверенным, чтобы сравнить рабочую ноду с
+нерабочими:
+
+- `outbounds` — есть ли `direct`, что стоит дефолтом
+- `routing` — число правил, catch-all в `blocked`, ссылки на несуществующие
+  outbound-теги (xray дропает такие соединения)
+- `dns` — какие резолверы прописаны (недоступный = коннект есть, запросы
+  клиента умирают)
+- `geosite` — правила ссылаются на категории, а файл на месте?
+- egress ноды и последние ошибки из `xray` + `xray-access` логов
+
+```bash
+cd /opt/nexus
+curl -fsSL https://raw.githubusercontent.com/rklm-it/scripts/main/compare_nodes.py -o /root/compare.py
+docker compose exec -T brain python3 -u - < /root/compare.py pablo_miami
+```
